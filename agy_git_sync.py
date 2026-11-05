@@ -1252,8 +1252,17 @@ class AgyGitSyncApp:
         # Working tree changes list
         changes_hdr = tk.Frame(left_panel, bg=self.BG_PANEL)
         changes_hdr.pack(fill=tk.X, pady=(6, 2))
-        ttk.Label(changes_hdr, text="Working Tree Changes (Modified / Untracked):", style="Panel.TLabel").pack(side=tk.LEFT)
-        self._make_btn(changes_hdr, "📂 Open Folder", self.open_repo_in_explorer, pady=2, padx=6).pack(side=tk.RIGHT)
+        ttk.Label(changes_hdr, text="Working Tree Changes:", style="Panel.TLabel").pack(side=tk.LEFT)
+        self._make_btn(changes_hdr, "📂 Open Repo Folder", self.open_repo_in_explorer, pady=2, padx=6).pack(side=tk.RIGHT, padx=(4, 0))
+        self._make_btn(
+            changes_hdr,
+            "➕ Select Files to Copy Into Repo...",
+            self.add_files_to_repo_dialog,
+            bg=self.ACCENT_BLUE,
+            bold=True,
+            pady=2,
+            padx=8,
+        ).pack(side=tk.RIGHT)
 
         tree_frame = tk.Frame(left_panel, bg=self.BG_PANEL)
         tree_frame.pack(fill=tk.BOTH, expand=True, pady=2)
@@ -1642,23 +1651,73 @@ class AgyGitSyncApp:
         target_dir = os.path.join(parent_dir, repo_name)
 
         def _work() -> None:
-            ok = self.engine.git_clone(url.strip(), target_dir)
+            # If target_dir already exists and is a git repo, switch to it and pull instead of failing
+            if os.path.isdir(os.path.join(target_dir, ".git")):
+                self.engine.log(f"Folder {target_dir} already exists! Selecting it and pulling latest changes...")
+                self.engine.git_pull(target_dir)
+                ok = True
+            else:
+                ok = self.engine.git_clone(url.strip(), target_dir)
             if ok:
                 def _done() -> None:
                     norm = os.path.normpath(target_dir)
+                    if len(norm) >= 2 and norm[1] == ":":
+                        norm = norm[0].upper() + norm[1:]
                     if norm not in self.repos:
                         self.repos.append(norm)
+                        self.repos.sort(key=lambda s: s.lower())
                         self.repo_combo["values"] = self.repos
                     self.repo_combo.set(norm)
                     self._on_repo_selected()
-                    messagebox.showinfo("Clone Complete", f"Repository cloned to:\n{norm}")
+                    messagebox.showinfo("Repository Ready", f"Repository is active at:\n{norm}")
                 self.root.after(0, _done)
+            else:
+                self.root.after(
+                    0,
+                    lambda: messagebox.showerror(
+                        "Clone Failed",
+                        f"Could not clone into:\n{target_dir}\n\nCheck the Activity Log at the bottom for details.",
+                    ),
+                )
 
         threading.Thread(target=_work, daemon=True).start()
 
     def open_repo_in_explorer(self) -> None:
         if self.current_repo and os.path.isdir(self.current_repo):
             os.startfile(self.current_repo) if os.name == "nt" else subprocess.Popen(["xdg-open", self.current_repo])
+
+    def add_files_to_repo_dialog(self) -> None:
+        if not self.current_repo or not os.path.isdir(self.current_repo):
+            messagebox.showwarning("No Repository Selected", "Please select a target Git repository first.")
+            return
+
+        files = filedialog.askopenfilenames(
+            title=f"Select File(s) to Copy Into {Path(self.current_repo).name}",
+            initialdir=str(Path(__file__).resolve().parent),
+        )
+        if not files:
+            return
+
+        copied = 0
+        dest_dir = Path(self.current_repo)
+        for f in files:
+            src_file = Path(f)
+            if src_file.is_file():
+                target_file = dest_dir / src_file.name
+                try:
+                    if src_file.resolve() != target_file.resolve():
+                        shutil.copy2(src_file, target_file)
+                    copied += 1
+                    self.engine.log(f"Copied '{src_file.name}' into {self.current_repo}")
+                except Exception as e:
+                    self.engine.log(f"Error copying {src_file.name}: {e}")
+
+        self.refresh_all()
+        messagebox.showinfo(
+            "Files Added to Repository",
+            f"Copied {copied} file(s) into:\n{self.current_repo}\n\n"
+            "You can now click '🚀 Commit & Push to Git' to upload them!",
+        )
 
     def set_remote_or_init_dialog(self) -> None:
         if not self.current_repo or not os.path.isdir(self.current_repo):
