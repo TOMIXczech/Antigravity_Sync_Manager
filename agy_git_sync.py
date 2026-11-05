@@ -1233,8 +1233,19 @@ class AgyGitSyncApp:
         info_card = tk.Frame(left_panel, bg=self.BG_INPUT, padx=10, pady=8)
         info_card.pack(fill=tk.X, pady=4)
 
-        self.lbl_branch = tk.Label(info_card, text="Branch: -", bg=self.BG_INPUT, fg=self.ACCENT_GREEN, font=("Segoe UI", 9, "bold"))
-        self.lbl_branch.pack(anchor="w")
+        branch_row = tk.Frame(info_card, bg=self.BG_INPUT)
+        branch_row.pack(fill=tk.X)
+        self.lbl_branch = tk.Label(branch_row, text="Branch: -", bg=self.BG_INPUT, fg=self.ACCENT_GREEN, font=("Segoe UI", 9, "bold"))
+        self.lbl_branch.pack(side=tk.LEFT)
+        self._make_btn(
+            branch_row,
+            "🔗 Init Git / Set Remote URL",
+            self.set_remote_or_init_dialog,
+            bg="#383852",
+            padx=6,
+            pady=1,
+        ).pack(side=tk.RIGHT)
+
         self.lbl_remote = tk.Label(info_card, text="Remote: -", bg=self.BG_INPUT, fg=self.FG_MUTED, font=("Segoe UI", 9))
         self.lbl_remote.pack(anchor="w")
 
@@ -1648,6 +1659,46 @@ class AgyGitSyncApp:
     def open_repo_in_explorer(self) -> None:
         if self.current_repo and os.path.isdir(self.current_repo):
             os.startfile(self.current_repo) if os.name == "nt" else subprocess.Popen(["xdg-open", self.current_repo])
+
+    def set_remote_or_init_dialog(self) -> None:
+        if not self.current_repo or not os.path.isdir(self.current_repo):
+            messagebox.showwarning("No Folder Selected", "Please select or browse to a folder first using '➕ Browse'.")
+            return
+
+        status = self.engine.get_repo_status(self.current_repo)
+        current_remote = status["remote"] if status["remote"] != "No remote configured" else ""
+
+        url = simpledialog.askstring(
+            "Initialize Git & Set Remote URL",
+            f"Folder: {self.current_repo}\n\nEnter the GitHub repository URL (e.g. https://github.com/user/repo.git):",
+            initialvalue=current_remote,
+            parent=self.root,
+        )
+        if url is None:
+            return
+        url = url.strip()
+
+        if not status["is_git"]:
+            self.engine.log(f"Initializing new Git repository in {self.current_repo}...")
+            self.engine.run_git(self.current_repo, ["init"])
+            self.engine.run_git(self.current_repo, ["branch", "-M", "main"])
+
+        if url:
+            # Check if 'origin' already exists
+            code, out, _ = self.engine.run_git(self.current_repo, ["remote"])
+            if code == 0 and "origin" in out.splitlines():
+                self.engine.run_git(self.current_repo, ["remote", "set-url", "origin", url])
+                self.engine.log(f"Updated remote 'origin' URL to: {url}")
+            else:
+                self.engine.run_git(self.current_repo, ["remote", "add", "origin", url])
+                self.engine.log(f"Added remote 'origin' URL: {url}")
+
+        self.refresh_all()
+        messagebox.showinfo(
+            "Git Repository Configured",
+            f"Folder: {self.current_repo}\nRemote: {url or 'Local only'}\n\n"
+            "You can now click '🚀 Commit & Push to Git' or '🌙 Done for Today'!",
+        )
 
     def commit_action(self, push: bool = False) -> None:
         if not self.current_repo:
